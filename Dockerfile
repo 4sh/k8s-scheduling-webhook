@@ -1,15 +1,17 @@
-FROM golang:1.12-alpine AS build 
+FROM golang:1.14-alpine AS build-stage
 ENV GO111MODULE on
 ENV CGO_ENABLED 0
 
 RUN apk add git make openssl
 
 WORKDIR /go/src/github.com/4sh/k8s-scheduling-webhook
-ADD . .
-RUN make test
+COPY . .
+
 RUN make app
 
-FROM scratch
-WORKDIR /app
-COPY --from=build /go/src/github.com/4sh/k8s-scheduling-webhook/scheduling-webhook .
-ENTRYPOINT ["/app/toleration-injection-server"]
+# Final image.
+FROM alpine:latest
+RUN apk --no-cache add \
+  ca-certificates
+COPY --from=build-stage /go/src/github.com/4sh/k8s-scheduling-webhook/scheduling-webhook /usr/local/bin/scheduling-webhook
+ENTRYPOINT ["/usr/local/bin/scheduling-webhook"]

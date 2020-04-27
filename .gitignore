@@ -1,7 +1,4 @@
-ssl/csr.conf
-ssl/*.key
-ssl/*.pem
-ssl/*.csr
+deploy/webhook-certs.yaml
 /scheduling-webhook
 .idea
 *.iml

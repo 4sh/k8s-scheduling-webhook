@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: toleration-config
+  name: scheduling-webhook-config
   namespace: kube-system
 data:
   TOLERATION_KEY_APPLICATION: dedicated
@@ -20,7 +20,7 @@ webhooks:
     clientConfig:
       caBundle: CA_BUNDLE_TO_BE_REPLACED_BY_CALLING_MAKE_CERT_IN_SSL_DIR
       service:
-        name: scheduling-webhook-webhook
+        name: scheduling-webhook
         namespace: kube-system
         path: "/mutate/application"
     rules:
@@ -33,4 +33,4 @@ webhooks:
     failurePolicy: Fail
     namespaceSelector:
       matchLabels:
-        type: application
+        type: test-application

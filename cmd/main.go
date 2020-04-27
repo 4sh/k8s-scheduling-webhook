@@ -1,53 +1,42 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"github.com/gorilla/pat"
 	"html"
-	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"time"
 
-	"github.com/gorilla/pat"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	m "github.com/4sh/k8s-scheduling-webhook/pkg/mutate"
+	whhttp "github.com/slok/kubewebhook/pkg/http"
+	"github.com/slok/kubewebhook/pkg/log"
+	mutatingwh "github.com/slok/kubewebhook/pkg/webhook/mutating"
 )
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "hello %q", html.EscapeString(r.URL.Path))
 }
 
-func handleMutate(w http.ResponseWriter, r *http.Request) {
-	// read the body / request
-	injectionId := r.URL.Query().Get(":id")
-	log.Printf("injecting toleration for %s", injectionId)
-
-	body, err := ioutil.ReadAll(r.Body)
-	defer r.Body.Close()
-
-	if err != nil {
-		sendError(err, w)
-		return
+func annotatePodMutator(ctx context.Context, obj metav1.Object) (bool, error) {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		// If not a pod just continue the mutation chain(if there is one) and don't do nothing.
+		return false, nil
 	}
 
-	// mutate the request
-	mutated, err := m.Mutate(body, injectionId, true)
-	if err != nil {
-		sendError(err, w)
-		return
+	// Mutate our object with the required annotations.
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
 	}
+	pod.Annotations["mutated"] = "true"
+	pod.Annotations["mutator"] = fmt.Sprintf("pod-annotate-%s", ctx.Value("id"))
 
-	// and write it back
-	w.WriteHeader(http.StatusOK)
-	w.Write(mutated)
-}
-
-func sendError(err error, w http.ResponseWriter) {
-	log.Println(err)
-	w.WriteHeader(http.StatusInternalServerError)
-	fmt.Fprintf(w, "%s", err)
+	return false, nil
 }
 
 type config struct {
@@ -66,16 +55,44 @@ func initFlags() *config {
 	return cfg
 }
 
+func HandlerWithIdFor(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get(":id")
+		handler.ServeHTTP(w, r.Clone(context.WithValue(r.Context(), "id", id)))
+	})
+}
+
 func main() {
-	log.Println("Starting server ...")
+	logger := &log.Std{Debug: true}
 
 	cfg := initFlags()
 
-	var mux *pat.Router = pat.New()
+	// Create our mutator
+	mt := mutatingwh.MutatorFunc(annotatePodMutator)
+
+	mcfg := mutatingwh.WebhookConfig{
+		Name: "podAnnotate",
+		Obj:  &corev1.Pod{},
+	}
+	wh, err := mutatingwh.NewWebhook(mcfg, mt, nil, nil, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating webhook: %s", err)
+		os.Exit(1)
+	}
+
+	// Get the handler for our webhook.
+	whHandler, err := whhttp.HandlerFor(wh)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating webhook handler: %s", err)
+		os.Exit(1)
+	}
+
+	var mux = pat.New()
 
 	mux.Get("/", handleRoot)
-	mux.Post("/mutate/{id}", handleMutate)
+	mux.Add("POST", "/mutate/{id}", HandlerWithIdFor(whHandler))
 
+	logger.Infof("Listening on :8080")
 	s := &http.Server{
 		Addr:           ":8443",
 		Handler:        mux,
@@ -84,5 +101,10 @@ func main() {
 		MaxHeaderBytes: 1 << 20, // 1048576
 	}
 
-	log.Fatal(s.ListenAndServeTLS(cfg.certFile, cfg.keyFile))
+	err = s.ListenAndServeTLS(cfg.certFile, cfg.keyFile)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error serving webhook: %s", err)
+		os.Exit(1)
+	}
 }
