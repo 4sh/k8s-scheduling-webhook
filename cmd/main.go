@@ -22,6 +22,26 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "hello %q", html.EscapeString(r.URL.Path))
 }
 
+func AppendNodeSelector(a *corev1.NodeAffinity, s corev1.NodeSelectorRequirement) {
+	if a.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		a.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+	}
+
+	a.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(a.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, corev1.NodeSelectorTerm{
+		MatchExpressions: []corev1.NodeSelectorRequirement{s},
+	})
+}
+
+func AppendNodeAffinitySelector(nodeSelection *corev1.PodSpec, s corev1.NodeSelectorRequirement) {
+	if nodeSelection.Affinity == nil {
+		nodeSelection.Affinity = &corev1.Affinity{}
+	}
+	if nodeSelection.Affinity.NodeAffinity == nil {
+		nodeSelection.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	AppendNodeSelector(nodeSelection.Affinity.NodeAffinity, s)
+}
+
 func annotatePodMutator(ctx context.Context, obj metav1.Object) (bool, error) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
@@ -34,7 +54,13 @@ func annotatePodMutator(ctx context.Context, obj metav1.Object) (bool, error) {
 		pod.Annotations = make(map[string]string)
 	}
 	pod.Annotations["mutated"] = "true"
-	pod.Annotations["mutator"] = fmt.Sprintf("pod-annotate-%s", ctx.Value("id"))
+	pod.Annotations["mutator"] = fmt.Sprintf("scheduling-%s", ctx.Value("id"))
+
+	AppendNodeAffinitySelector(&pod.Spec, corev1.NodeSelectorRequirement{
+		Key:      "autoscaling",
+		Operator: "In",
+		Values:   []string{"true"},
+	})
 
 	return false, nil
 }
