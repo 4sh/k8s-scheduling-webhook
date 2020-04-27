@@ -1,0 +1,62 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduling-webhook
+  namespace: kube-system
+  labels:
+    app: scheduling-webhook
+spec:
+  publishNotReadyAddresses: true
+  ports:
+    - port: 443
+      targetPort: 8443
+  selector:
+    app: scheduling-webhook
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduling-webhook
+  namespace: kube-system
+  labels:
+    app: scheduling-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduling-webhook
+  template:
+    metadata:
+      name: scheduling-webhook
+      labels:
+        app: scheduling-webhook
+    spec:
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+      containers:
+        - name: scheduling-webhook
+          image: gcr.io/quatreapp/k8s-scheduling-webhook:latest
+          imagePullPolicy: Always
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 16Mi
+          envFrom:
+            - configMapRef:
+                name: toleration-config
+          args:
+            - -tls-cert-file=/etc/webhook/certs/cert.pem
+            - -tls-key-file=/etc/webhook/certs/key.pem
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: scheduling-webhook-certs
